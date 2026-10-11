@@ -1,1 +1,317 @@
-canbus
+esphome:
+  name: schalter1
+  friendly_name: schalter1
+
+# Replace this with your actual platform if you aren't using ESP32.
+
+
+
+wifi:
+  ssid: CharleTownLand
+  password: RockieElias010722!
+  ap:
+    ssid: schalter1 Fallback Hotspot
+    password: "1blvKl0iYLTh"
+
+captive_portal:
+
+
+substitutions:
+  name: schalter
+  id: 1
+
+# Raum: Wohnzimmer
+# Montageort: Schalter Eingang
+
+
+
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    # sdkconfig_options:
+    #   CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: y
+    #   CONFIG_ESP_CONSOLE_UART_DEFAULT: n     # Deaktiviert den Standard-UART als Konsole
+    #   CONFIG_ESP_CONSOLE_SECONDARY_NONE: y 
+    #   CONFIG_USB_OTG_SUPPORT_NON_OTG_MODE: y  
+
+
+# Aktiviert den Webserver für direkten Zugriff (auch im AP-Modus)
+web_server:
+  port: 80
+  local: true  # Wichtig: Lädt Ressourcen direkt vom ESP (für Offline-Betrieb)
+  version: 3
+
+
+  
+
+# Ermöglicht die Erreichbarkeit über http://mein-esp32-c6.local
+# mdns:
+#   disabled: false
+
+# captive_portal:
+
+logger:
+  # level: DEBUG
+#  baud_rate: 0 # Schaltet den physischen UART0 aus, damit alles über USB geht
+
+
+ota:
+  - platform: web_server
+  - platform: esphome
+
+
+api:
+  
+    
+    
+
+canbus:
+  - platform: esp32_can
+    id: my_canbus
+    rx_pin: 3
+    tx_pin: 2
+    bit_rate: 1KBPS
+    can_id: 101
+    rx_queue_len: 100
+    tx_queue_len: 50
+    
+#     on_frame:
+#       - can_id: 201
+#         then:
+#           - lambda: "if(x.size() > 0) (x[0] == 0x1) ? id(braun).turn_on() : id(braun).turn_off();"
+#       - can_id: 202
+#         then:
+#           - lambda: "if(x.size() > 0) (x[0] == 0x1) ? id(braun).turn_on() : id(braun).turn_off();"
+
+
+
+
+  - platform: template
+    name: "CAN Sende-Fehlerzähler"
+    id: can_tx_error_counter
+    icon: "mdi:alert-outline"
+    accuracy_decimals: 0
+    device_class: data_rate
+    
+  - platform: template
+    name: "CAN Nachrichten im Puffer"
+    id: can_msgs_to_tx
+    icon: "mdi:bus-alert"
+    accuracy_decimals: 0
+    device_class: data_rate
+
+
+
+
+  # 1. Der Live-Puffer-Monitor
+    on_value_range:
+      - above: 40
+        then:
+          - lambda: |-
+              // Puffer radikal leeren, um Platz für neue Daten zu machen
+              if (twai_clear_transmit_queue() == ESP_OK) {
+                ESP_LOGW("can_auto", "Puffer-Limit überschritten (>40)! Sende-Puffer wurde automatisch bereinigt.");
+                
+                // Den Statistik-Zähler um 1 erhöhen
+                auto current_clears = id(can_puffer_resets).get_raw_state();
+                int new_count = (isnan(current_clears) ? 0 : (int)current_clears) + 1;
+                id(can_puffer_resets).publish_state(new_count);
+              }
+
+  # 2. Statistik-Zähler für Home Assistant
+  - platform: template
+    name: "CAN Puffer-Resets"
+    id: can_puffer_resets
+    unit_of_measurement: "mal"
+    state_class: "total_increasing"
+    accuracy_decimals: 0
+    lambda: |-
+      static int count = 0;
+      return count;
+      
+
+
+
+    
+
+text_sensor:
+  - platform: template
+    name: "CAN Bus Zustand"
+    id: can_bus_state
+    icon: "mdi:connection"
+
+
+
+    
+
+
+# text_sensor:
+#   - platform: wifi_info
+#     ip_address:
+#       name: "IP Adresse"
+#       id: my_ip_address  # Falls du die ID brauchst, muss sie hierhin
+#     ssid:
+#       name: "Verbunden mit"
+#       id: my_wifi_ssid
+
+
+    
+
+# 1 8 10 11 2 3
+
+# 3 grünw
+# 2 grün
+# 11 blauw
+# 10 blau
+# 8 braunw
+# 1 braun
+
+button:
+
+
+  - platform: template
+    name: "CAN Recovery"
+    on_press:
+      - lambda: |-
+            // Versucht den ESP32 internen CAN (TWAI) zurückzusetzen
+            twai_initiate_recovery();
+
+
+
+  - platform: template
+    name: "CAN Stop"
+    on_press:
+      - lambda: |-
+            twai_stop();
+
+
+
+  - platform: template
+    name: "CAN Start"
+    on_press:
+      - lambda: |-
+            twai_start();
+
+
+    # then:
+    #   - lambda: |-
+    #       // Erzwingt den Neustart des internen ESP32-CAN-Controllers (TWAI) bei Fehlern
+    #       if (id(mein_canbus).is_failed()) {
+    #         ESP_LOGW("canbus", "CAN-Bus Fehler erkannt! Starte Hardware neu...");
+    #         id(mein_canbus).setup(); 
+    #       }
+
+
+
+
+
+interval:
+  - interval: 10s
+    
+    then: 
+      - canbus.send: [123]
+    
+
+
+# 1. Intervall auf echte 1 Sekunde korrigieren für maximale Reaktionszeit
+
+
+
+
+
+
+
+
+  - interval: 5s
+    then:
+      - lambda: |-
+          twai_status_info_t status_info;
+          
+          // Daten direkt vom ESP32-Chip abrufen
+          if (twai_get_status_info(&status_info) == ESP_OK) {
+            
+            // Die Zahl des Zustands (0-3) in lesbaren Text übersetzen
+            std::string state_text = "UNBEKANNT";
+            if (status_info.state == TWAI_STATE_STOPPED)     state_text = "GESTOPPT";
+            if (status_info.state == TWAI_STATE_RUNNING)     state_text = "AKTIV (OK)";
+            if (status_info.state == TWAI_STATE_BUS_OFF)     state_text = "BUS-OFF (ABGESCHALTET)";
+            if (status_info.state == TWAI_STATE_RECOVERING)  state_text = "RECOVERY (STARTET NEU)";
+            
+            // Ausgabe im ESPHome-Log als "Bold/Cyan" Info-Meldung
+            ESP_LOGI("can_diagnose", "--------------------------------");
+            ESP_LOGI("can_diagnose", "CAN-Bus Zustand: %s", state_text.c_str());
+            ESP_LOGI("can_diagnose", "Nachrichten im Puffer: %d", status_info.msgs_to_tx);
+            ESP_LOGI("can_diagnose", "Hardware Sende-Fehler: %d", status_info.tx_error_counter);
+            ESP_LOGI("can_diagnose", "--------------------------------");
+          } else {
+            ESP_LOGE("can_diagnose", "Fehler: Hardware-Status konnte nicht gelesen werden!");
+          }
+
+
+
+# Das Intervall prüft nur den Zustand und startet bei Bedarf das Skript
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          #include "driver/twai.h"
+          twai_status_info_t status_info;
+          
+          if (twai_get_status_info(&status_info) == ESP_OK) {
+            
+            // 1. Numerische Sensorwerte schreiben
+            id(can_tx_error_counter).publish_state(status_info.tx_error_counter);
+            id(can_msgs_to_tx).publish_state(status_info.msgs_to_tx);
+            
+            // 2. Buszustand als Text übersetzen und schreiben
+            switch (status_info.state) {
+              case TWAI_STATE_STOPPED:
+                id(can_bus_state).publish_state("Gestoppt");
+                break;
+              case TWAI_STATE_RUNNING:
+                id(can_bus_state).publish_state("Aktiv");
+                break;
+              case TWAI_STATE_BUS_OFF:
+                id(can_bus_state).publish_state("Bus-Off (Fehler)");
+                break;
+              case TWAI_STATE_RECOVERING:
+                id(can_bus_state).publish_state("Wiederherstellung");
+                break;
+              default:
+                id(can_bus_state).publish_state("Unbekannt");
+                break;
+            }
+
+            // Ihre bestehende Recovery-Logik
+            if ((status_info.state == TWAI_STATE_BUS_OFF || status_info.state == TWAI_STATE_STOPPED) && !id(can_recovery_script).is_running()) {
+              id(can_recovery_script).execute();
+            }
+          }
+
+
+# Hier läuft die sichere, nicht-blockierende Ablaufsteuerung
+script:
+  - id: can_recovery_script
+    mode: single
+    then:
+      - logger.log: "TWAI Bus-Off erkannt! Starte Recovery-Sequenz..."
+      
+      # 1. Warte 1 Sekunde (nicht-blockierend)
+     # - delay: 1s
+      
+      # 2. Recovery initiieren
+      - lambda: |-
+            twai_initiate_recovery();
+      # 3. Warte 2 Sekunden (nicht-blockierend)
+      - delay: 4s
+      
+      # 4. TWAI Treiber wieder starten
+      - lambda: |-
+            twai_start();
+
+      - delay: 3s
+
+
